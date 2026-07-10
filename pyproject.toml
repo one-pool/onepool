@@ -38,6 +38,16 @@ dependencies = [
     "cryptography>=49.0.0",
     "fastapi>=0.139.0",
     "uvicorn[standard]>=0.51.0",
+    "pyyaml>=6.0.3",
+]
+
+[project.optional-dependencies]
+# torch is intentionally NOT here: the right build depends on your GPU/OS.
+# Run `onepool doctor` for the exact install command, then: pip install "onepool[train]"
+train = [
+    "transformers>=4.48",
+    "peft>=0.14",
+    "datasets>=3.0",
 ]
 
 [project.urls]

@@ -33,8 +33,8 @@ Pre-alpha, built in the open. Roadmap:
 |---|---|---|
 | M0 | CLI skeleton, hardware probe, `onepool doctor` | ✅ done |
 | M1 | Zero-config discovery, join/leave, live dashboard | ✅ done |
-| M2 | Single-node LoRA fine-tuning path | 🔜 next |
-| M3 | Distributed training (DiLoCo) across mixed hardware over WiFi | planned |
+| M2 | Single-node LoRA fine-tuning path | ✅ done |
+| M3 | Distributed training (DiLoCo) across mixed hardware over WiFi | 🔜 next |
 | M4 | Sync compression, rebalancing, first release | planned |
 | v0.2 | Distributed inference | planned |
 

@@ -108,6 +108,83 @@ def join(
 
 
 @app.command()
+def train(
+    config: str = typer.Argument(..., help="Path to a job YAML (see examples/)."),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show training debug logs."),
+) -> None:
+    """Run a LoRA fine-tuning job described by a YAML file (single-node for now)."""
+    _setup_logging(verbose)
+    from onepool.jobs import TrainJob
+    from onepool.train import require_training_stack
+
+    try:
+        job = TrainJob.from_yaml(config)
+    except (OSError, ValueError) as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1) from None
+    try:
+        require_training_stack()
+    except ImportError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1) from None
+
+    from rich.progress import (
+        BarColumn,
+        Progress,
+        TextColumn,
+        TimeElapsedColumn,
+        TimeRemainingColumn,
+    )
+
+    from onepool.train.local import pick_device, run_local
+
+    choice = pick_device(job.precision)
+    console.print(
+        Panel(
+            f"model:    [bold]{job.model}[/bold]\n"
+            f"dataset:  {job.dataset}\n"
+            f"device:   {choice.name} ({choice.device}, {str(choice.dtype).split('.')[-1]})\n"
+            f"plan:     {job.steps} steps in rounds of {job.inner_steps} "
+            f"(batch {job.batch_size} x accum {job.grad_accum}, seq {job.seq_len})",
+            title="training job",
+            border_style="cyan",
+        )
+    )
+
+    with Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("{task.completed}/{task.total} steps"),
+        TextColumn("loss {task.fields[loss]:.4f}"),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+        console=console,
+    ) as progress:
+        bar = progress.add_task("training", total=job.steps, loss=float("nan"))
+
+        def on_step(step: int, loss: float) -> None:
+            progress.update(bar, completed=step, loss=loss)
+
+        def on_round(stats) -> None:
+            progress.console.print(
+                f"[dim]round {stats.round_index}: loss {stats.mean_loss:.4f}, "
+                f"{stats.tokens_per_second:.0f} tok/s — checkpoint saved[/dim]"
+            )
+
+        stats = run_local(job, on_step=on_step, on_round=on_round)
+
+    final = stats[-1] if stats else None
+    console.print(
+        Panel(
+            (f"final loss:  [bold]{final.mean_loss:.4f}[/bold]\n" if final else "")
+            + f"adapters:    [cyan]{job.output_dir}/final[/cyan]",
+            title="done",
+            border_style="green",
+        )
+    )
+
+
+@app.command()
 def status() -> None:
     """Show the pool this machine is hosting (reads the local dashboard API)."""
     for port in range(DASH_PORT, DASH_PORT + 10):

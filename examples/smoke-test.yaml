@@ -1,0 +1,10 @@
+# Smallest possible end-to-end check: a tiny model on a bundled text file.
+# Finishes in a couple of minutes on any GPU, and even runs on CPU.
+# (run from the repo root, or adjust the dataset path)
+model: distilgpt2
+dataset: examples/data/sample-corpus.txt
+seq_len: 256
+batch_size: 4
+steps: 40
+inner_steps: 20
+output_dir: checkpoints/smoke
