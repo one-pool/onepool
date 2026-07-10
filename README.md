@@ -37,7 +37,7 @@ Pre-alpha, built in the open. Roadmap:
 | M1 | Zero-config discovery, join/leave, live dashboard | ✅ done |
 | M2 | Single-node LoRA fine-tuning path | ✅ done |
 | M3 | Distributed training (DiLoCo) across mixed hardware over WiFi | ✅ done |
-| M4 | Sync compression, rebalancing, first release | 🔜 next |
+| M4 | Sync compression, speed-proportional rounds | ✅ done |
 | v0.2 | Distributed inference | planned |
 
 ## Try it now
