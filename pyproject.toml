@@ -36,8 +36,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/onepool/onepool"
-Issues = "https://github.com/onepool/onepool/issues"
+Homepage = "https://github.com/one-pool/onepool"
+Issues = "https://github.com/one-pool/onepool/issues"
 
 [project.scripts]
 onepool = "onepool.cli.main:main"

@@ -41,7 +41,7 @@ Pre-alpha, built in the open. Roadmap:
 ## Try it now
 
 ```
-git clone https://github.com/onepool/onepool && cd onepool
+git clone https://github.com/one-pool/onepool && cd onepool
 uv sync
 uv run onepool doctor    # what can this machine contribute to a pool?
 ```
