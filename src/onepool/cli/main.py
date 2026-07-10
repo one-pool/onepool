@@ -258,6 +258,7 @@ async def _run_host(spec: NodeSpec) -> None:
         await asyncio.Event().wait()  # run until Ctrl-C
     finally:
         dash_server.should_exit = True
+        await asyncio.sleep(0.3)  # let uvicorn exit its loop before we tear the loop down
         with contextlib.suppress(Exception):
             await advert.stop()
         await host.stop()
@@ -321,6 +322,7 @@ async def _run_pool_train(job, spec: NodeSpec, min_workers: int) -> None:
         )
     finally:
         dash_server.should_exit = True
+        await asyncio.sleep(0.3)  # let uvicorn exit its loop before we tear the loop down
         with contextlib.suppress(Exception):
             await advert.stop()
         await host.stop()

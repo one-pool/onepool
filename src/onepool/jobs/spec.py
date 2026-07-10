@@ -38,6 +38,7 @@ class TrainJob:
     outer_lr: float = 0.7  # DiLoCo outer Nesterov-SGD (paper defaults)
     outer_momentum: float = 0.9
     sync_timeout: float = 600.0  # seconds the coordinator waits for a round's results
+    sync_compression: str = "int8"  # pseudo-gradient wire format: int8 (4x smaller) | none
 
     precision: str = "auto"  # auto | fp32 | fp16 | bf16
     seed: int = 0
@@ -62,6 +63,10 @@ class TrainJob:
     def validate(self) -> None:
         if self.precision not in ("auto", "fp32", "fp16", "bf16"):
             raise ValueError(f"precision must be auto/fp32/fp16/bf16, got {self.precision!r}")
+        if self.sync_compression not in ("int8", "none"):
+            raise ValueError(
+                f"sync_compression must be int8 or none, got {self.sync_compression!r}"
+            )
         for name in ("seq_len", "batch_size", "grad_accum", "steps", "inner_steps", "lora_r"):
             if getattr(self, name) < 1:
                 raise ValueError(f"{name} must be >= 1")

@@ -43,7 +43,21 @@ class WorkerSlot:
     enrolled_round: int
     last_loss: float | None = None
     last_tok_s: float | None = None
+    steps_per_second: float | None = None
     missed_rounds: int = 0
+
+
+def scale_steps(base_steps: int, speed: float | None, fastest: float) -> int:
+    """Speed-proportional inner steps so a slow node doesn't stall every round.
+
+    A node at 40% of the fastest speed runs 40% of the steps and finishes the
+    round at roughly the same wall time. Floor of 10% keeps every node
+    contributing; sample-weighted averaging keeps the math honest.
+    """
+    if not speed or fastest <= 0:
+        return base_steps
+    fraction = max(0.1, min(1.0, speed / fastest))
+    return max(1, round(base_steps * fraction))
 
 
 @dataclass
@@ -81,6 +95,8 @@ class Coordinator:
                 losses.append((msg["loss"], float(msg["samples"])))
                 slot = self.workers[member_id]
                 slot.last_loss, slot.last_tok_s = msg["loss"], msg.get("tok_s")
+                slot.steps_per_second = msg.get("sps") or slot.steps_per_second
+            self._host_sps = host_stats.steps_per_second
 
             new_weights = outer.step(weighted_average(deltas, sample_weights))
             trainer.set_adapter_state(new_weights)
@@ -146,15 +162,18 @@ class Coordinator:
 
     async def _broadcast_round_update(self, rnd: int, steps: int, weights) -> None:
         layout = self._shard_layout()
-        packed = pack_state(weights)
+        packed = pack_state(weights)  # canonical weights always full precision
         num_shards = len(self.workers) + 1
+        speeds = [s.steps_per_second for s in self.workers.values() if s.steps_per_second]
+        fastest = max(speeds + [getattr(self, "_host_sps", 0.0)])
         for member_id in list(self.workers):
+            slot = self.workers[member_id]
             ok = await self.host.send_to(
                 member_id,
                 {
                     "t": protocol.ROUND_UPDATE,
                     "round": rnd,
-                    "steps": steps,
+                    "steps": scale_steps(steps, slot.steps_per_second, fastest),
                     "weights": packed,
                     "shard": layout[member_id],
                     "shards": num_shards,
@@ -265,7 +284,8 @@ async def worker_loop(client: PoolClient, on_status=None) -> None:
                     "samples": samples,
                     "loss": stats.mean_loss,
                     "tok_s": stats.tokens_per_second,
-                    "delta": pack_state(delta),
+                    "sps": stats.steps_per_second,
+                    "delta": pack_state(delta, job.sync_compression),
                 }
             )
             status(f"round {rnd}: loss {stats.mean_loss:.4f}, {stats.tokens_per_second:.0f} tok/s")

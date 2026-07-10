@@ -30,6 +30,7 @@ class RoundStats:
     steps: int
     mean_loss: float
     tokens_per_second: float
+    steps_per_second: float = 0.0  # drives speed-proportional work assignment
 
 
 @dataclass
@@ -152,6 +153,7 @@ class LocalTrainer:
             steps=steps,
             mean_loss=sum(losses) / len(losses),
             tokens_per_second=tokens / elapsed,
+            steps_per_second=steps / elapsed,
         )
 
     # --- distributed hooks (DiLoCo) ---------------------------------------

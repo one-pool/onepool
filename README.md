@@ -5,24 +5,26 @@
 onepool makes any group of computers on the same local network — Windows, Linux, or macOS; NVIDIA, AMD, integrated graphics, or plain CPUs — into a single ad-hoc cluster for machine learning. Not just inference: **real distributed training over ordinary WiFi** is the headline feature.
 
 ```
-pipx install onepool          # every machine, any OS
+pip install onepool           # every machine, any OS
+onepool doctor                # tells you the exact PyTorch install for your GPU
+pip install "onepool[train]"  # training stack (transformers, peft, datasets)
 
-# machine A — anyone in the room
-onepool up                    # start a pool, get a session code
+# machine A — whoever has the job
+onepool train run.yaml --pool --nodes 2   # hosts a pool, prints a session code
 
-# machines B, C, D
-onepool join amber-fox-42     # zero config, auto-discovered
+# machines B, C — anyone in the room
+onepool join amber-fox-42                 # zero config, auto-discovered, starts working
 
-# machine A
-onepool train run.yaml        # fine-tune across every machine in the pool
 # Ctrl-C → clean teardown. Nothing persists. No accounts. No daemons.
 ```
+
+A live dashboard (session code, nodes, loss curve) serves at `http://localhost:7070` while the pool runs. No pool handy? `onepool train run.yaml` alone trains on just your machine.
 
 ## Why
 
 - **Existing tools don't do this.** exo (archived) was inference-only and Apple-first. hivemind targets internet-scale volunteer computing. Ray and Horovod need DevOps expertise and homogeneous clusters. Nothing lets a study group pool three mismatched laptops for an evening of fine-tuning.
 - **Heterogeneous is the default, not the edge case.** A 6GB RTX 3050 and a 4GB GTX 1650 in the same pool, each doing work proportional to what it can actually handle — measured, not assumed.
-- **WiFi is enough.** Training uses a DiLoCo-style low-communication algorithm (many local steps, rare synchronization of small pseudo-gradients) plus LoRA adapters, so a sync round is megabytes, not gigabytes.
+- **WiFi is enough.** Training uses a DiLoCo-style low-communication algorithm (many local steps, rare synchronization of small pseudo-gradients) plus LoRA adapters and int8-quantized sync, so a sync round is single-digit megabytes, not gigabytes.
 - **Session-based by design.** A pool exists while its processes run and vanishes when they stop. Disposable clusters, not infrastructure.
 
 ## Status
