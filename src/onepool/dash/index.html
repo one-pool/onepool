@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>onepool</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --border: #2d333b;
+    --text: #e6edf3; --dim: #8b949e; --accent: #4ade80; --warn: #fbbf24;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text); min-height: 100vh;
+    font-family: ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
+    padding: 2rem 1.5rem; max-width: 960px; margin: 0 auto;
+  }
+  header { display: flex; align-items: baseline; gap: 0.75rem; margin-bottom: 2rem; }
+  header h1 { font-size: 1.25rem; font-weight: 600; letter-spacing: 0.02em; }
+  header .live { color: var(--dim); font-size: 0.8rem; }
+  header .live::before {
+    content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--accent); margin-right: 0.4rem;
+  }
+  header .live.down::before { background: var(--warn); }
+
+  .code-card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 1.5rem; margin-bottom: 1.5rem; text-align: center;
+  }
+  .code-card .label { color: var(--dim); font-size: 0.8rem; margin-bottom: 0.5rem; }
+  .code-card .code { font-size: 2.2rem; font-weight: 700; letter-spacing: 0.06em; color: var(--accent); }
+  .code-card .hint { color: var(--dim); font-size: 0.8rem; margin-top: 0.75rem; }
+  .code-card .hint code { color: var(--text); }
+
+  .stats { color: var(--dim); font-size: 0.85rem; margin-bottom: 1rem; }
+  .stats b { color: var(--text); }
+
+  .nodes { display: grid; gap: 0.75rem; }
+  .node {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 1rem 1.25rem; display: grid; gap: 0.35rem;
+  }
+  .node .row1 { display: flex; align-items: baseline; gap: 0.6rem; flex-wrap: wrap; }
+  .node .name { font-weight: 700; font-size: 1rem; }
+  .node .tag {
+    font-size: 0.7rem; padding: 0.1rem 0.5rem; border-radius: 999px;
+    border: 1px solid var(--border); color: var(--dim);
+  }
+  .node .tag.host { color: var(--accent); border-color: var(--accent); }
+  .node .meta { color: var(--dim); font-size: 0.82rem; }
+  .node .gpu { font-size: 0.85rem; }
+  .node .gpu .ok { color: var(--accent); }
+  .node .gpu .maybe { color: var(--warn); }
+  .empty { color: var(--dim); text-align: center; padding: 2rem; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>onepool</h1>
+    <span class="live" id="live">live</span>
+  </header>
+
+  <div class="code-card">
+    <div class="label">session code — share with the room</div>
+    <div class="code" id="code">·····</div>
+    <div class="hint">join from any machine: <code>onepool join <span id="codeCmd">…</span></code></div>
+  </div>
+
+  <div class="stats" id="stats"></div>
+  <div class="nodes" id="nodes"><div class="empty">waiting for pool state…</div></div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+
+  function fmtUptime(startedAt) {
+    const s = Math.max(0, Math.floor(Date.now() / 1000 - startedAt));
+    const m = Math.floor(s / 60), h = Math.floor(m / 60);
+    return h ? `${h}h ${m % 60}m` : m ? `${m}m ${s % 60}s` : `${s}s`;
+  }
+
+  function gpuLine(g) {
+    const vram = g.vram_gb ? `${g.vram_gb} GB` : "VRAM ?";
+    const cls = g.usable ? "ok" : "maybe";
+    const status = g.usable ? "ready" : "detected";
+    return `<div class="gpu"><span class="${cls}">▮</span> ${g.name} — ${g.backend.toUpperCase()}, ${vram} <span class="${cls}">(${status})</span></div>`;
+  }
+
+  function render(state) {
+    $("code").textContent = state.session_code;
+    $("codeCmd").textContent = state.session_code;
+    const n = state.members.length;
+    const gpus = state.members.flatMap(m => m.gpus.filter(g => g.usable)).length;
+    const ram = state.members.reduce((a, m) => a + (m.ram_gb || 0), 0);
+    $("stats").innerHTML =
+      `<b>${n}</b> node${n === 1 ? "" : "s"} · <b>${gpus}</b> usable GPU${gpus === 1 ? "" : "s"} · ` +
+      `<b>${ram.toFixed(1)} GB</b> pooled RAM · up <b>${fmtUptime(state.started_at)}</b>`;
+
+    $("nodes").innerHTML = state.members.map(m => `
+      <div class="node">
+        <div class="row1">
+          <span class="name">${m.hostname}</span>
+          ${m.is_host ? '<span class="tag host">host</span>' : '<span class="tag">worker</span>'}
+          <span class="tag">${m.os}</span>
+        </div>
+        <div class="meta">${m.cpu} · ${m.cores} threads · ${m.ram_gb} GB RAM</div>
+        ${m.gpus.length ? m.gpus.map(gpuLine).join("") : '<div class="meta">no GPU — CPU worker</div>'}
+      </div>`).join("") || '<div class="empty">no nodes yet</div>';
+  }
+
+  function connect() {
+    const ws = new WebSocket(`ws://${location.host}/ws`);
+    ws.onmessage = (e) => render(JSON.parse(e.data));
+    ws.onopen = () => { $("live").textContent = "live"; $("live").classList.remove("down"); };
+    ws.onclose = () => {
+      $("live").textContent = "reconnecting"; $("live").classList.add("down");
+      setTimeout(connect, 2000);
+    };
+  }
+  connect();
+</script>
+</body>
+</html>
