@@ -35,6 +35,10 @@ class TrainJob:
     lora_alpha: int = 32
     lora_dropout: float = 0.05
 
+    outer_lr: float = 0.7  # DiLoCo outer Nesterov-SGD (paper defaults)
+    outer_momentum: float = 0.9
+    sync_timeout: float = 600.0  # seconds the coordinator waits for a round's results
+
     precision: str = "auto"  # auto | fp32 | fp16 | bf16
     seed: int = 0
 

@@ -110,9 +110,15 @@ def join(
 @app.command()
 def train(
     config: str = typer.Argument(..., help="Path to a job YAML (see examples/)."),
+    pool: bool = typer.Option(
+        False, "--pool", help="Host a pool and train across every machine that joins."
+    ),
+    nodes: int = typer.Option(
+        0, "--nodes", help="With --pool: wait for this many workers before starting."
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show training debug logs."),
 ) -> None:
-    """Run a LoRA fine-tuning job described by a YAML file (single-node for now)."""
+    """Run a LoRA fine-tuning job — on this machine, or across a pool with --pool."""
     _setup_logging(verbose)
     from onepool.jobs import TrainJob
     from onepool.train import require_training_stack
@@ -137,6 +143,15 @@ def train(
     )
 
     from onepool.train.local import pick_device, run_local
+
+    if pool:
+        with console.status("Probing hardware..."):
+            spec = probe()
+        try:
+            asyncio.run(_run_pool_train(job, spec, min_workers=nodes))
+        except KeyboardInterrupt:
+            console.print("\n[dim]training pool closed.[/dim]")
+        return
 
     choice = pick_device(job.precision)
     console.print(
@@ -248,6 +263,69 @@ async def _run_host(spec: NodeSpec) -> None:
         await host.stop()
 
 
+async def _run_pool_train(job, spec: NodeSpec, min_workers: int) -> None:
+    from onepool.train.distributed import Coordinator
+
+    session = SessionCode.generate()
+    host = PoolHost(session=session, spec=spec)
+    await host.start()
+    advert = PoolAdvertisement(session.code_id, host.port, host.fingerprint)
+    await advert.start()
+    dash_server, dash_port = await dash_serve(host.state)
+
+    console.print(
+        Panel(
+            f"session code:  [bold green]{session.code}[/bold green]\n"
+            f"dashboard:     [cyan]http://localhost:{dash_port}[/cyan]\n"
+            f"workers join:  [bold]onepool join {session.code}[/bold]"
+            f"  [dim](or --host <this-ip>:{host.port})[/dim]",
+            title="training pool is up",
+            border_style="green",
+        )
+    )
+
+    if min_workers > 0:
+        with console.status(f"waiting for {min_workers} worker(s) to join..."):
+            while len(host.state.members) - 1 < min_workers:
+                await asyncio.sleep(0.5)
+    n_workers = len(host.state.members) - 1
+    console.print(f"[green]starting with {n_workers} worker(s) + this machine[/green]\n")
+
+    loss_history: list[float] = []
+    total_rounds = len(job.rounds)
+    host.state.update_job(
+        model=job.model, round=0, total_rounds=total_rounds, loss_history=[], workers=n_workers
+    )
+
+    def on_round(rnd: int, loss: float, participants: int) -> None:
+        loss_history.append(round(loss, 4))
+        host.state.update_job(
+            round=rnd + 1, loss_history=loss_history, workers=participants - 1
+        )
+        console.print(
+            f"round {rnd + 1}/{total_rounds}: loss [bold]{loss:.4f}[/bold] "
+            f"({participants} node{'s' if participants != 1 else ''})"
+        )
+
+    coordinator = Coordinator(host=host, job=job, on_round=on_round)
+    try:
+        stats = await coordinator.run()
+        final = stats[-1].mean_loss if stats else float("nan")
+        console.print(
+            Panel(
+                f"final loss:  [bold]{final:.4f}[/bold]\n"
+                f"adapters:    [cyan]{job.output_dir}/final[/cyan]",
+                title="done",
+                border_style="green",
+            )
+        )
+    finally:
+        dash_server.should_exit = True
+        with contextlib.suppress(Exception):
+            await advert.stop()
+        await host.stop()
+
+
 async def _run_client(session: SessionCode, spec: NodeSpec, direct: str | None) -> None:
     if direct:
         host_addr, _, port_text = direct.partition(":")
@@ -293,10 +371,16 @@ async def _run_client(session: SessionCode, spec: NodeSpec, direct: str | None) 
         f"[green]pool now has {len(members)} node{'s' if len(members) != 1 else ''}[/green]"
     )
 
+    from onepool.train.distributed import worker_loop
+
+    worker = asyncio.create_task(
+        worker_loop(client, on_status=lambda text: console.print(f"[cyan]{text}[/cyan]"))
+    )
     try:
         await client.run()
         console.print("[yellow]pool host went away — session over.[/yellow]")
     finally:
+        worker.cancel()
         await client.leave()
 
 

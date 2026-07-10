@@ -34,6 +34,8 @@ class PoolHost:
 
     def __post_init__(self) -> None:
         self.state = PoolState(self.session.code)
+        # training messages land here for the coordinator: (member_id, msg)
+        self.inbox: asyncio.Queue[tuple[str, dict]] = asyncio.Queue()
         self._writers: dict[str, asyncio.StreamWriter] = {}
         self._server: asyncio.Server | None = None
         self._sweeper: asyncio.Task | None = None
@@ -115,6 +117,19 @@ class PoolHost:
                 await protocol.write_frame(writer, {"t": protocol.PONG})
             elif msg["t"] == protocol.LEAVE:
                 return
+            elif msg["t"] in protocol.TRAIN_TYPES:
+                self.state.touch(member_id)  # a training frame proves liveness too
+                await self.inbox.put((member_id, msg))
+
+    async def send_to(self, member_id: str, msg: dict) -> bool:
+        writer = self._writers.get(member_id)
+        if writer is None:
+            return False
+        try:
+            await protocol.write_frame(writer, msg)
+            return True
+        except (ConnectionError, OSError):
+            return False
 
     async def _broadcast_members(self, exclude: str | None = None) -> None:
         members = self.state.snapshot()["members"]

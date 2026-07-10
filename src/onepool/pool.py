@@ -59,7 +59,12 @@ class PoolState:
         self.session_code = session_code
         self.started_at = time.time()
         self.members: dict[str, Member] = {}
+        self.job: dict[str, Any] | None = None  # live training metrics for the dashboard
         self._listeners: list[Callable[[], None]] = []
+
+    def update_job(self, **fields: Any) -> None:
+        self.job = {**(self.job or {}), **fields}
+        self._notify()
 
     def add(self, member: Member) -> None:
         self.members[member.member_id] = member
@@ -85,6 +90,7 @@ class PoolState:
             "session_code": self.session_code,
             "started_at": self.started_at,
             "members": [m.summary() for m in self.members.values()],
+            "job": self.job,
         }
 
     def on_change(self, listener: Callable[[], None]) -> None:

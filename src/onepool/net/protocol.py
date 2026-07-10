@@ -12,7 +12,9 @@ from typing import Any
 
 import msgpack
 
-MAX_FRAME = 8 * 1024 * 1024  # control plane today; tensor sync will negotiate larger
+# Large enough for LoRA pseudo-gradients / adapter states with headroom;
+# still a hard stop against a peer streaming garbage lengths.
+MAX_FRAME = 256 * 1024 * 1024
 
 # Handshake
 HELLO = "hello"  # client -> host: {t, code_id, nonce}
@@ -26,6 +28,15 @@ MEMBERS = "members"  # host -> all: {t, members}
 PING = "ping"  # client -> host: {t}
 PONG = "pong"  # host -> client: {t}
 LEAVE = "leave"  # client -> host: {t}
+
+# Training (DiLoCo rounds)
+TRAIN_START = "train_start"  # host -> worker: {t, job, weights, shard, shards, steps, round}
+ROUND_RESULT = "round_result"  # worker -> host: {t, round, steps, samples, loss, tok_s, delta}
+ROUND_UPDATE = "round_update"  # host -> worker: {t, round, weights, shard, shards, steps}
+TRAIN_END = "train_end"  # host -> worker: {t, reason}
+TRAIN_ERR = "train_err"  # worker -> host: {t, error}
+
+TRAIN_TYPES = {TRAIN_START, ROUND_RESULT, ROUND_UPDATE, TRAIN_END, TRAIN_ERR}
 
 
 class ProtocolError(Exception):

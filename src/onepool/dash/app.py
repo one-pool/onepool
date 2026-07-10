@@ -81,5 +81,7 @@ async def _serve_guarded(server: uvicorn.Server, sock: socket.socket) -> None:
         await server.serve(sockets=[sock])
     except SystemExit:  # uvicorn startup failure must not kill the pool process
         log.warning("dashboard server exited during startup")
+    except asyncio.CancelledError:  # normal teardown when the pool closes
+        pass
     finally:
         sock.close()

@@ -53,6 +53,17 @@
   .node .gpu .ok { color: var(--accent); }
   .node .gpu .maybe { color: var(--warn); }
   .empty { color: var(--dim); text-align: center; padding: 2rem; }
+
+  .job-card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 1rem 1.25rem; margin-bottom: 1rem; display: grid; gap: 0.75rem;
+  }
+  .job-card .row1 { display: flex; align-items: baseline; gap: 0.6rem; flex-wrap: wrap; }
+  .job-card .name { font-weight: 700; }
+  #lossChart { width: 100%; height: 120px; display: block; }
+  #lossChart polyline { fill: none; stroke: var(--accent); stroke-width: 2; }
+  #lossChart .grid { stroke: var(--border); stroke-width: 1; }
+  #lossChart text { fill: var(--dim); font-size: 10px; font-family: inherit; }
 </style>
 </head>
 <body>
@@ -68,6 +79,14 @@
   </div>
 
   <div class="stats" id="stats"></div>
+  <div class="job-card" id="job" style="display:none">
+    <div class="row1">
+      <span class="name" id="jobModel"></span>
+      <span class="tag" id="jobRound"></span>
+      <span class="tag" id="jobLoss"></span>
+    </div>
+    <svg id="lossChart" viewBox="0 0 600 120" preserveAspectRatio="none"></svg>
+  </div>
   <div class="nodes" id="nodes"><div class="empty">waiting for pool state…</div></div>
 
 <script>
@@ -86,7 +105,31 @@
     return `<div class="gpu"><span class="${cls}">▮</span> ${g.name} — ${g.backend.toUpperCase()}, ${vram} <span class="${cls}">(${status})</span></div>`;
   }
 
+  function renderJob(job) {
+    const card = $("job");
+    if (!job) { card.style.display = "none"; return; }
+    card.style.display = "grid";
+    $("jobModel").textContent = job.model;
+    $("jobRound").textContent = `round ${job.round}/${job.total_rounds}`;
+    const hist = job.loss_history || [];
+    $("jobLoss").textContent = hist.length ? `loss ${hist[hist.length - 1]}` : "warming up";
+
+    const svg = $("lossChart");
+    if (hist.length < 2) { svg.innerHTML = ""; return; }
+    const lo = Math.min(...hist), hi = Math.max(...hist);
+    const pad = (hi - lo) * 0.1 || 0.5;
+    const y = (v) => 110 - ((v - lo + pad) / (hi - lo + 2 * pad)) * 100;
+    const x = (i) => 10 + (i / (hist.length - 1)) * 580;
+    const pts = hist.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+    svg.innerHTML =
+      `<line class="grid" x1="10" y1="110" x2="590" y2="110"></line>` +
+      `<text x="10" y="10">${hi.toFixed(3)}</text>` +
+      `<text x="10" y="108" dy="-4">${lo.toFixed(3)}</text>` +
+      `<polyline points="${pts}"></polyline>`;
+  }
+
   function render(state) {
+    renderJob(state.job);
     $("code").textContent = state.session_code;
     $("codeCmd").textContent = state.session_code;
     const n = state.members.length;

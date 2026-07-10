@@ -34,6 +34,8 @@ class PoolClient:
     def __post_init__(self) -> None:
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
+        # training messages from the coordinator land here for the worker loop
+        self.train_inbox: asyncio.Queue[dict] = asyncio.Queue()
 
     async def connect(self, host: str, port: int, expected_fingerprint: str | None) -> None:
         """Join the pool at host:port. Raises JoinRejected on auth failure."""
@@ -78,10 +80,16 @@ class PoolClient:
                     self.members = msg["members"]
                     if self.on_members_changed:
                         self.on_members_changed(self.members)
+                elif msg["t"] in protocol.TRAIN_TYPES:
+                    await self.train_inbox.put(msg)
         except (asyncio.IncompleteReadError, ConnectionError):
             log.info("lost connection to pool host")
         finally:
             ping_task.cancel()
+
+    async def send(self, msg: dict) -> None:
+        assert self._writer
+        await protocol.write_frame(self._writer, msg)
 
     async def leave(self) -> None:
         if self._writer:

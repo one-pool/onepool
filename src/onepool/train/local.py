@@ -61,10 +61,14 @@ def pick_device(precision: str = "auto") -> DeviceChoice:
 class LocalTrainer:
     """Owns the model, data, and optimizer for this node's share of a job."""
 
-    def __init__(self, job: TrainJob, on_step=None) -> None:
+    def __init__(
+        self, job: TrainJob, on_step=None, shard_index: int = 0, num_shards: int = 1
+    ) -> None:
         self.job = job
         self.on_step = on_step  # callback(step, loss) for progress display
         self.global_step = 0
+        self.shard_index = shard_index
+        self.num_shards = num_shards
 
     def setup(self) -> None:
         import torch
@@ -150,6 +154,35 @@ class LocalTrainer:
             tokens_per_second=tokens / elapsed,
         )
 
+    # --- distributed hooks (DiLoCo) ---------------------------------------
+
+    def get_adapter_state(self) -> dict:
+        """Trainable (LoRA) parameters as named float32 numpy arrays."""
+        import torch
+
+        return {
+            name: p.detach().to("cpu", dtype=torch.float32).numpy()
+            for name, p in self.model.named_parameters()
+            if p.requires_grad
+        }
+
+    def set_adapter_state(self, state: dict) -> None:
+        """Load canonical weights from the coordinator into the live model."""
+        import torch
+
+        params = dict(self.model.named_parameters())
+        with torch.no_grad():
+            for name, arr in state.items():
+                p = params[name]
+                p.copy_(torch.from_numpy(arr).to(device=p.device, dtype=p.dtype))
+
+    def set_shard(self, shard_index: int, num_shards: int) -> None:
+        """Re-shard the data stream (e.g. after pool membership changed)."""
+        if (shard_index, num_shards) != (self.shard_index, self.num_shards):
+            self.shard_index = shard_index
+            self.num_shards = num_shards
+            self._batches = self._batch_iterator()
+
     def save(self, tag: str = "final") -> Path:
         out = Path(self.job.output_dir) / tag
         out.mkdir(parents=True, exist_ok=True)
@@ -164,6 +197,8 @@ class LocalTrainer:
         from torch.utils.data import DataLoader
 
         dataset = _load_texts(self.job)
+        if self.num_shards > 1:
+            dataset = dataset.shard(num_shards=self.num_shards, index=self.shard_index)
 
         def tokenize(example: dict) -> dict:
             return self.tokenizer(
