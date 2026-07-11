@@ -93,6 +93,19 @@ class PoolHost:
             await self._reject(writer, "authentication failed")
             return None
 
+        machine_id = (auth.get("node") or {}).get("machine_id")
+        if machine_id and not _same_machine_allowed():
+            already = any(
+                m.spec.get("machine_id") == machine_id for m in self.state.members.values()
+            )
+            if already:
+                await self._reject(
+                    writer,
+                    "this machine is already in the pool — one node per machine "
+                    "(set ONEPOOL_ALLOW_SAME_MACHINE=1 on the host to override for testing)",
+                )
+                return None
+
         member = Member(member_id=new_member_id(), spec=auth["node"])
         self.state.add(member)
         self._writers[member.member_id] = writer
@@ -163,3 +176,9 @@ def _constant_time_eq(a: bytes, b: bytes) -> bool:
     import hmac
 
     return isinstance(a, bytes) and hmac.compare_digest(a, b)
+
+
+def _same_machine_allowed() -> bool:
+    import os
+
+    return os.environ.get("ONEPOOL_ALLOW_SAME_MACHINE") == "1"
