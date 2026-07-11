@@ -14,7 +14,7 @@ from onepool.net.server import PoolHost
 from onepool.session import SessionCode
 
 
-def _spec(name: str) -> NodeSpec:
+def _spec(name: str, machine_id: str | None = None) -> NodeSpec:
     return NodeSpec(
         hostname=name,
         os_name="TestOS",
@@ -25,6 +25,7 @@ def _spec(name: str) -> NodeSpec:
         cpu_cores_physical=2,
         cpu_cores_logical=4,
         ram_gb=8.0,
+        machine_id=machine_id if machine_id is not None else f"machine-{name}",
     )
 
 
@@ -58,6 +59,35 @@ async def test_wrong_fingerprint_refused(host: PoolHost):
     client = PoolClient(session=host.session, spec=_spec("cautious"))
     with pytest.raises(JoinRejected, match="certificate"):
         await client.connect("127.0.0.1", host.port, "not-the-real-fingerprint")
+
+
+async def test_same_machine_join_rejected(host: PoolHost, monkeypatch):
+    monkeypatch.delenv("ONEPOOL_ALLOW_SAME_MACHINE", raising=False)
+    # host's spec is _spec("host-node") -> machine_id "machine-host-node"
+    twin = PoolClient(session=host.session, spec=_spec("twin", machine_id="machine-host-node"))
+    with pytest.raises(JoinRejected, match="already in the pool"):
+        await twin.connect("127.0.0.1", host.port, host.fingerprint)
+    assert len(host.state.members) == 1
+
+
+async def test_same_machine_join_allowed_with_override(host: PoolHost, monkeypatch):
+    monkeypatch.setenv("ONEPOOL_ALLOW_SAME_MACHINE", "1")
+    twin = PoolClient(session=host.session, spec=_spec("twin", machine_id="machine-host-node"))
+    await twin.connect("127.0.0.1", host.port, host.fingerprint)
+    assert len(host.state.members) == 2
+    await twin.leave()
+
+
+async def test_blank_machine_id_not_treated_as_duplicate(host: PoolHost, monkeypatch):
+    monkeypatch.delenv("ONEPOOL_ALLOW_SAME_MACHINE", raising=False)
+    # old clients (pre-fix) send no machine_id; two of them must still both join
+    a = PoolClient(session=host.session, spec=_spec("old-a", machine_id=""))
+    b = PoolClient(session=host.session, spec=_spec("old-b", machine_id=""))
+    await a.connect("127.0.0.1", host.port, host.fingerprint)
+    await b.connect("127.0.0.1", host.port, host.fingerprint)
+    assert len(host.state.members) == 3
+    await a.leave()
+    await b.leave()
 
 
 async def test_disconnect_removes_member(host: PoolHost):

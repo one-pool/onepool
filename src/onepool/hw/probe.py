@@ -58,6 +58,7 @@ class NodeSpec:
     cpu_cores_physical: int
     cpu_cores_logical: int
     ram_gb: float
+    machine_id: str = ""  # stable per-machine fingerprint; guards against self-joins
     accelerators: list[Accelerator] = field(default_factory=list)
     torch: TorchInfo | None = None
 
@@ -81,6 +82,7 @@ def probe() -> NodeSpec:
 
     return NodeSpec(
         hostname=socket.gethostname(),
+        machine_id=machine_fingerprint(),
         os_name=platform.system(),
         os_version=platform.release(),
         arch=platform.machine(),
@@ -92,6 +94,20 @@ def probe() -> NodeSpec:
         accelerators=accels,
         torch=torch_info,
     )
+
+
+def machine_fingerprint() -> str:
+    """Stable, non-reversible identifier for this physical machine.
+
+    Hostname + primary MAC, hashed. Two onepool processes on the same box get
+    the same fingerprint, which is how the host detects (and refuses) a
+    machine joining a pool it is already part of.
+    """
+    import hashlib
+    import uuid
+
+    raw = f"{socket.gethostname()}|{uuid.getnode()}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
 def gpu_vendor(name: str) -> str | None:
