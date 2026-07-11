@@ -72,6 +72,7 @@ class LocalTrainer:
         self.num_shards = num_shards
 
     def setup(self) -> None:
+        _quiet_third_party_noise()
         import torch
         from peft import LoraConfig, get_peft_model
         from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -264,6 +265,27 @@ def _load_texts(job: TrainJob):
             f"(available: {', '.join(data.column_names)}) — set text_field in the job file"
         )
     return data
+
+
+def _quiet_third_party_noise() -> None:
+    """Silence advisory chatter from the ML stack that drowns our own output.
+
+    Each of these is a known, harmless message: the HF anonymous-request
+    notice, the peft Conv1D fan_in_fan_out auto-correction, and the datasets
+    fingerprint hash fallback (our tokenize closure isn't picklable — caching
+    is irrelevant for a stream we re-tokenize per run anyway).
+    """
+    import warnings
+
+    logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
+    logging.getLogger("datasets").setLevel(logging.ERROR)
+    warnings.filterwarnings("ignore", message=".*fan_in_fan_out.*")
+    try:
+        from transformers.utils import logging as hf_logging
+
+        hf_logging.set_verbosity_error()
+    except ImportError:
+        pass
 
 
 def _warmup_cosine(optimizer, warmup: int, total: int):

@@ -265,7 +265,7 @@ async def _run_host(spec: NodeSpec) -> None:
 
 
 async def _run_pool_train(job, spec: NodeSpec, min_workers: int) -> None:
-    from onepool.train.distributed import Coordinator
+    from onepool.train.distributed import Coordinator, round_plan
 
     session = SessionCode.generate()
     host = PoolHost(session=session, spec=spec)
@@ -293,7 +293,7 @@ async def _run_pool_train(job, spec: NodeSpec, min_workers: int) -> None:
     console.print(f"[green]starting with {n_workers} worker(s) + this machine[/green]\n")
 
     loss_history: list[float] = []
-    total_rounds = len(job.rounds)
+    total_rounds = len(round_plan(job))  # includes the short calibration round 0
     host.state.update_job(
         model=job.model, round=0, total_rounds=total_rounds, loss_history=[], workers=n_workers
     )
@@ -303,12 +303,18 @@ async def _run_pool_train(job, spec: NodeSpec, min_workers: int) -> None:
         host.state.update_job(
             round=rnd + 1, loss_history=loss_history, workers=participants - 1
         )
+        label = " (calibration)" if rnd == 0 else ""
         console.print(
-            f"round {rnd + 1}/{total_rounds}: loss [bold]{loss:.4f}[/bold] "
+            f"round {rnd + 1}/{total_rounds}{label}: loss [bold]{loss:.4f}[/bold] "
             f"({participants} node{'s' if participants != 1 else ''})"
         )
 
-    coordinator = Coordinator(host=host, job=job, on_round=on_round)
+    coordinator = Coordinator(
+        host=host,
+        job=job,
+        on_round=on_round,
+        on_log=lambda text: console.print(f"[dim]{text}[/dim]"),
+    )
     try:
         stats = await coordinator.run()
         final = stats[-1].mean_loss if stats else float("nan")

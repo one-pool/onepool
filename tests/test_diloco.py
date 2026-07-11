@@ -65,6 +65,16 @@ def test_int8_all_zero_tensor():
     np.testing.assert_array_equal(restored["w"], state["w"])
 
 
+def test_round_plan_prepends_calibration():
+    from onepool.jobs import TrainJob
+    from onepool.train.distributed import round_plan
+
+    job = TrainJob(model="m", dataset="d", steps=200, inner_steps=100)
+    assert round_plan(job) == [5, 100, 100]
+    tiny = TrainJob(model="m", dataset="d", steps=6, inner_steps=3)
+    assert round_plan(tiny) == [3, 3, 3]  # calibration never exceeds inner_steps
+
+
 def test_scale_steps_proportional():
     from onepool.train.distributed import scale_steps
 

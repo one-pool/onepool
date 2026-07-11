@@ -47,6 +47,20 @@ class WorkerSlot:
     missed_rounds: int = 0
 
 
+CALIBRATION_STEPS = 5
+
+
+def round_plan(job: TrainJob) -> list[int]:
+    """A short calibration round first, then the job's own rounds.
+
+    Round 0 runs a handful of steps on every node purely to measure real
+    steps/sec — without it, the first full round stalls on the slowest
+    machine (a 2-core laptop can take minutes for what a GPU does in
+    seconds), and speed-proportional scaling has no data to work with.
+    """
+    return [min(CALIBRATION_STEPS, job.inner_steps)] + job.rounds
+
+
 def scale_steps(base_steps: int, speed: float | None, fastest: float) -> int:
     """Speed-proportional inner steps so a slow node doesn't stall every round.
 
@@ -66,6 +80,7 @@ class Coordinator:
     job: TrainJob
     on_round: callable = None  # callback(round_index, mean_loss, workers)
     on_step: callable = None  # local trainer progress passthrough
+    on_log: callable = None  # callback(text) for slow-path feedback (barrier waits)
 
     workers: dict[str, WorkerSlot] = field(init=False, default_factory=dict)
 
@@ -74,16 +89,21 @@ class Coordinator:
         await asyncio.to_thread(trainer.setup)
         weights = trainer.get_adapter_state()
         outer = NesterovOuter(weights, self.job.outer_lr, self.job.outer_momentum)
+        self._host_sps = 0.0
 
         stats: list[RoundStats] = []
-        rounds = self.job.rounds
+        rounds = round_plan(self.job)
         for rnd, steps in enumerate(rounds):
             await self._enroll_new_members(rnd, steps, outer.weights)
             start_state = {k: v.copy() for k, v in outer.weights.items()}
 
-            # host trains its own shard while workers train theirs
-            host_task = asyncio.create_task(asyncio.to_thread(trainer.run_round, steps, rnd))
-            worker_results = await self._collect_results(rnd)
+            # the host is a node like any other: it also gets speed-scaled steps
+            fastest = self._fastest_sps()
+            host_steps = scale_steps(steps, self._host_sps or None, fastest)
+            host_task = asyncio.create_task(
+                asyncio.to_thread(trainer.run_round, host_steps, rnd)
+            )
+            worker_results = await self._collect_results(rnd, host_task)
             host_stats: RoundStats = await host_task
 
             deltas = [state_delta(start_state, trainer.get_adapter_state())]
@@ -127,6 +147,10 @@ class Coordinator:
     def _pool_worker_ids(self) -> list[str]:
         return [m.member_id for m in self.host.state.members.values() if not m.is_host]
 
+    def _fastest_sps(self) -> float:
+        speeds = [s.steps_per_second for s in self.workers.values() if s.steps_per_second]
+        return max(speeds + [self._host_sps])
+
     def _shard_layout(self) -> dict[str, int]:
         """Host is always shard 0; workers get 1..N in stable id order."""
         return {mid: i + 1 for i, mid in enumerate(sorted(self.workers))}
@@ -164,8 +188,7 @@ class Coordinator:
         layout = self._shard_layout()
         packed = pack_state(weights)  # canonical weights always full precision
         num_shards = len(self.workers) + 1
-        speeds = [s.steps_per_second for s in self.workers.values() if s.steps_per_second]
-        fastest = max(speeds + [getattr(self, "_host_sps", 0.0)])
+        fastest = self._fastest_sps()
         for member_id in list(self.workers):
             slot = self.workers[member_id]
             ok = await self.host.send_to(
@@ -189,15 +212,31 @@ class Coordinator:
 
     # --- round collection ---------------------------------------------------
 
-    async def _collect_results(self, rnd: int) -> dict[str, dict]:
+    async def _collect_results(self, rnd: int, host_task=None) -> dict[str, dict]:
         """Wait for this round's pseudo-gradients from every enrolled worker."""
         expected = {
             mid for mid, slot in self.workers.items() if slot.enrolled_round <= rnd
         }
         results: dict[str, dict] = {}
-        deadline = time.monotonic() + self.job.sync_timeout
+        started = time.monotonic()
+        deadline = started + self.job.sync_timeout
+        last_log = started
 
         while expected - results.keys():
+            # let the user see why nothing is printing during a slow round
+            now = time.monotonic()
+            if self.on_log and now - last_log >= 30 and (host_task is None or host_task.done()):
+                missing = len(expected - results.keys())
+                names = ", ".join(
+                    self.workers[m].hostname for m in expected - results.keys()
+                )
+                self.on_log(
+                    f"waiting for {missing} worker(s) [{names}] — "
+                    f"{int(now - started)}s into round {rnd} "
+                    f"(slow nodes get fewer steps from the next round)"
+                )
+                last_log = now
+
             # workers that left the pool aren't coming back this round
             alive = set(self._pool_worker_ids())
             for gone in expected - alive:
