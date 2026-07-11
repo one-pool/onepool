@@ -40,6 +40,9 @@ Pre-alpha, built in the open. Roadmap:
 | M4 | Sync compression, speed-proportional rounds | ✅ done |
 | v0.2 | Distributed inference | planned |
 
+**Want to try it on your machines right now?** Follow [TESTING.md](TESTING.md) —
+a 15-minute walkthrough from `pip install` to a two-laptop distributed training run.
+
 ## Try it now
 
 ```
