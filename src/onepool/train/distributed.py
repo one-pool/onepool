@@ -48,6 +48,33 @@ class WorkerSlot:
 
 
 CALIBRATION_STEPS = 5
+MAX_SHIPPED_DATASET = 50 * 1024 * 1024  # local dataset files up to this size travel with the job
+
+
+def dataset_payload(job: TrainJob) -> dict | None:
+    """The job's dataset as wire bytes, when it's a shippable local file.
+
+    Workers must not need any files on disk — the coordinator ships local
+    corpora with the job. HF dataset ids return None (each node downloads
+    from the hub itself), as do oversized files.
+    """
+    from pathlib import Path
+
+    p = Path(job.dataset)
+    if p.is_file() and p.stat().st_size <= MAX_SHIPPED_DATASET:
+        return {"name": p.name, "data": p.read_bytes()}
+    return None
+
+
+def materialize_dataset(payload: dict) -> str:
+    """Write a shipped dataset to a temp file; returns the path to train from."""
+    import tempfile
+    from pathlib import Path
+
+    tmp = Path(tempfile.mkdtemp(prefix="onepool-data-"))
+    dest = tmp / payload["name"]
+    dest.write_bytes(payload["data"])
+    return str(dest)
 
 
 def round_plan(job: TrainJob) -> list[int]:
@@ -167,6 +194,8 @@ class Coordinator:
             )
         layout = self._shard_layout()
         num_shards = len(self.workers) + 1
+        if not hasattr(self, "_dataset_cache"):
+            self._dataset_cache = dataset_payload(self.job)
         for member_id, slot in list(self.workers.items()):
             if slot.enrolled_round == rnd:
                 ok = await self.host.send_to(
@@ -175,6 +204,7 @@ class Coordinator:
                         "t": protocol.TRAIN_START,
                         "job": asdict(self.job),
                         "weights": pack_state(weights),
+                        "dataset_file": self._dataset_cache,
                         "round": rnd,
                         "steps": steps,
                         "shard": layout[member_id],
@@ -300,18 +330,24 @@ async def worker_loop(client: PoolClient, on_status=None) -> None:
 
         job = _job_from_wire(msg["job"])
         status(f"training job received: {job.model} (round {msg['round']})")
+        if msg.get("dataset_file"):
+            job.dataset = materialize_dataset(msg["dataset_file"])
+            status(f"dataset received from coordinator ({msg['dataset_file']['name']})")
         trainer = LocalTrainer(job, shard_index=msg["shard"], num_shards=msg["shards"])
         start_state = unpack_state(msg["weights"])
         try:
+            status("preparing model + data (first time may download the model)...")
             await asyncio.to_thread(trainer.setup)
             trainer.set_adapter_state(start_state)
         except Exception as e:  # model/dataset load can fail in many ways
             log.exception("worker setup failed")
+            status(f"setup failed: {e}")
             await client.send({"t": protocol.TRAIN_ERR, "error": f"setup failed: {e}"})
             continue
 
         rnd, steps = msg["round"], msg["steps"]
         while True:
+            status(f"round {rnd}: training {steps} steps...")
             stats = await asyncio.to_thread(trainer.run_round, steps, rnd)
             samples = stats.steps * job.batch_size * job.grad_accum
             delta = state_delta(start_state, trainer.get_adapter_state())

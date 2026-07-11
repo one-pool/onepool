@@ -65,6 +65,31 @@ def test_int8_all_zero_tensor():
     np.testing.assert_array_equal(restored["w"], state["w"])
 
 
+def test_dataset_ships_and_materializes(tmp_path):
+    from onepool.jobs import TrainJob
+    from onepool.train.distributed import dataset_payload, materialize_dataset
+
+    corpus = tmp_path / "corpus.txt"
+    corpus.write_text("hello pool\n" * 100)
+    job = TrainJob(model="m", dataset=str(corpus))
+
+    payload = dataset_payload(job)
+    assert payload["name"] == "corpus.txt"
+
+    restored = materialize_dataset(payload)
+    assert restored != str(corpus)  # lands in a temp dir, not the original path
+    with open(restored, encoding="utf-8") as f:
+        assert f.read() == "hello pool\n" * 100
+
+
+def test_hub_dataset_id_not_shipped():
+    from onepool.jobs import TrainJob
+    from onepool.train.distributed import dataset_payload
+
+    job = TrainJob(model="m", dataset="roneneldan/TinyStories")
+    assert dataset_payload(job) is None
+
+
 def test_round_plan_prepends_calibration():
     from onepool.jobs import TrainJob
     from onepool.train.distributed import round_plan

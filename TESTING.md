@@ -121,7 +121,8 @@ output_dir: checkpoints/test
 onepool train job.yaml
 ```
 
-First run downloads distilgpt2 (~350MB). Then a progress bar with live loss.
+First run downloads distilgpt2 (~350MB). A live dashboard URL is printed too —
+open it for the loss curve. Then a progress bar with live loss.
 **Success = loss falls** (roughly 6.0 → below 5.0 in 40 steps) and:
 
 ```
@@ -145,14 +146,29 @@ On **machine B**:
 onepool join <that-code>
 ```
 
-Machine B prints `training job received: distilgpt2` and downloads the model
-(first time only). Then both machines train in parallel; on machine A expect:
+Machine B prints its progress stage by stage — no silent phases:
 
 ```
-round 1/2: loss 6.0xxx (2 nodes)
-round 2/2: loss 4.8xxx (2 nodes)
-final loss:  4.8xxx
+training job received: distilgpt2 (round 0)
+dataset received from coordinator (corpus.txt)     <- workers need no files
+preparing model + data (first time may download the model)...
+round 0: training 5 steps...
+round 0: loss 6.1xxx, xx tok/s
 ```
+
+Round 0 is a short **calibration round** (5 steps) that measures each node's
+speed; from round 1, slower nodes automatically get proportionally fewer steps
+so nobody stalls the pool. On machine A expect:
+
+```
+round 1/3 (calibration): loss 6.1xxx (2 nodes)
+round 2/3: loss 5.9xxx (2 nodes)
+round 3/3: loss 4.7xxx (2 nodes)
+final loss:  4.7xxx
+```
+
+If a round is slow, machine A prints `waiting for 1 worker(s) [NAME] — 30s
+into round...` instead of sitting silent.
 
 Machine B shows its own per-round loss and ends with `job complete`.
 

@@ -134,16 +134,6 @@ def train(
         console.print(f"[red]{e}[/red]")
         raise typer.Exit(1) from None
 
-    from rich.progress import (
-        BarColumn,
-        Progress,
-        TextColumn,
-        TimeElapsedColumn,
-        TimeRemainingColumn,
-    )
-
-    from onepool.train.local import pick_device, run_local
-
     if pool:
         with console.status("Probing hardware..."):
             spec = probe()
@@ -153,50 +143,10 @@ def train(
             console.print("\n[dim]training pool closed.[/dim]")
         return
 
-    choice = pick_device(job.precision)
-    console.print(
-        Panel(
-            f"model:    [bold]{job.model}[/bold]\n"
-            f"dataset:  {job.dataset}\n"
-            f"device:   {choice.name} ({choice.device}, {str(choice.dtype).split('.')[-1]})\n"
-            f"plan:     {job.steps} steps in rounds of {job.inner_steps} "
-            f"(batch {job.batch_size} x accum {job.grad_accum}, seq {job.seq_len})",
-            title="training job",
-            border_style="cyan",
-        )
-    )
-
-    with Progress(
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TextColumn("{task.completed}/{task.total} steps"),
-        TextColumn("loss {task.fields[loss]:.4f}"),
-        TimeElapsedColumn(),
-        TimeRemainingColumn(),
-        console=console,
-    ) as progress:
-        bar = progress.add_task("training", total=job.steps, loss=float("nan"))
-
-        def on_step(step: int, loss: float) -> None:
-            progress.update(bar, completed=step, loss=loss)
-
-        def on_round(stats) -> None:
-            progress.console.print(
-                f"[dim]round {stats.round_index}: loss {stats.mean_loss:.4f}, "
-                f"{stats.tokens_per_second:.0f} tok/s — checkpoint saved[/dim]"
-            )
-
-        stats = run_local(job, on_step=on_step, on_round=on_round)
-
-    final = stats[-1] if stats else None
-    console.print(
-        Panel(
-            (f"final loss:  [bold]{final.mean_loss:.4f}[/bold]\n" if final else "")
-            + f"adapters:    [cyan]{job.output_dir}/final[/cyan]",
-            title="done",
-            border_style="green",
-        )
-    )
+    try:
+        asyncio.run(_run_solo_train(job))
+    except KeyboardInterrupt:
+        console.print("\n[dim]training stopped.[/dim]")
 
 
 @app.command()
@@ -262,6 +212,88 @@ async def _run_host(spec: NodeSpec) -> None:
         with contextlib.suppress(Exception):
             await advert.stop()
         await host.stop()
+
+
+async def _run_solo_train(job) -> None:
+    """Single-machine training, with the same live dashboard a pool gets."""
+    from rich.progress import (
+        BarColumn,
+        Progress,
+        TextColumn,
+        TimeElapsedColumn,
+        TimeRemainingColumn,
+    )
+
+    from onepool.pool import Member, PoolState
+    from onepool.train.local import pick_device, run_local
+
+    with console.status("Probing hardware..."):
+        spec = probe()
+    state = PoolState("local training")
+    state.add(Member.from_spec(spec, is_host=True))
+    dash_server, dash_port = await dash_serve(state)
+
+    choice = pick_device(job.precision)
+    console.print(
+        Panel(
+            f"model:     [bold]{job.model}[/bold]\n"
+            f"dataset:   {job.dataset}\n"
+            f"device:    {choice.name} ({choice.device}, {str(choice.dtype).split('.')[-1]})\n"
+            f"plan:      {job.steps} steps in rounds of {job.inner_steps} "
+            f"(batch {job.batch_size} x accum {job.grad_accum}, seq {job.seq_len})\n"
+            f"dashboard: [cyan]http://localhost:{dash_port}[/cyan]",
+            title="training job",
+            border_style="cyan",
+        )
+    )
+
+    loop = asyncio.get_running_loop()
+    loss_history: list[float] = []
+    total_rounds = len(job.rounds)
+    state.update_job(
+        model=job.model, round=0, total_rounds=total_rounds, loss_history=[], workers=0
+    )
+
+    with Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("{task.completed}/{task.total} steps"),
+        TextColumn("loss {task.fields[loss]:.4f}"),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+        console=console,
+    ) as progress:
+        bar = progress.add_task("training", total=job.steps, loss=float("nan"))
+
+        def on_step(step: int, loss: float) -> None:  # runs in the training thread
+            progress.update(bar, completed=step, loss=loss)
+
+        def on_round(stats) -> None:  # runs in the training thread
+            loss_history.append(round(stats.mean_loss, 4))
+            snapshot = list(loss_history)
+            loop.call_soon_threadsafe(
+                lambda: state.update_job(round=stats.round_index + 1, loss_history=snapshot)
+            )
+            progress.console.print(
+                f"[dim]round {stats.round_index}: loss {stats.mean_loss:.4f}, "
+                f"{stats.tokens_per_second:.0f} tok/s — checkpoint saved[/dim]"
+            )
+
+        try:
+            stats = await asyncio.to_thread(run_local, job, on_step, on_round)
+        finally:
+            dash_server.should_exit = True
+            await asyncio.sleep(0.3)
+
+    final = stats[-1] if stats else None
+    console.print(
+        Panel(
+            (f"final loss:  [bold]{final.mean_loss:.4f}[/bold]\n" if final else "")
+            + f"adapters:    [cyan]{job.output_dir}/final[/cyan]",
+            title="done",
+            border_style="green",
+        )
+    )
 
 
 async def _run_pool_train(job, spec: NodeSpec, min_workers: int) -> None:
