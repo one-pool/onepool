@@ -48,6 +48,11 @@ def build_app(state: PoolState) -> FastAPI:
                 await socket.send_json(state.snapshot())
         except WebSocketDisconnect:
             pass
+        except asyncio.CancelledError:
+            # server shutting down while a browser tab is still connected —
+            # normal end of a session, not an error
+            with contextlib.suppress(Exception):
+                await socket.close()
 
     return app
 
@@ -72,8 +77,25 @@ async def serve(state: PoolState, port: int = DEFAULT_PORT) -> tuple[uvicorn.Ser
         if task.done():
             sock.close()
             continue
+        server._onepool_task = task  # so shutdown() can await a clean exit
         return server, candidate
     raise OSError(f"no usable dashboard port in {port}..{port + 19}")
+
+
+async def shutdown(server: uvicorn.Server) -> None:
+    """Stop the dashboard and wait for uvicorn to finish.
+
+    Tearing the event loop down while uvicorn is mid-shutdown (e.g. a browser
+    tab still holds the WebSocket) spews CancelledError tracebacks; awaiting
+    the serve task lets it close connections and exit on its own.
+    """
+    server.should_exit = True
+    task = getattr(server, "_onepool_task", None)
+    if task is not None:
+        try:
+            await asyncio.wait_for(task, timeout=5.0)
+        except (TimeoutError, asyncio.CancelledError):
+            task.cancel()
 
 
 async def _serve_guarded(server: uvicorn.Server, sock: socket.socket) -> None:

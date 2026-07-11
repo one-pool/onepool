@@ -17,6 +17,7 @@ from rich.table import Table
 import onepool
 from onepool.dash.app import DEFAULT_PORT as DASH_PORT
 from onepool.dash.app import serve as dash_serve
+from onepool.dash.app import shutdown as dash_shutdown
 from onepool.discovery import PoolAdvertisement, find_pool
 from onepool.hw.doctor import diagnose
 from onepool.hw.probe import NodeSpec, probe
@@ -207,8 +208,7 @@ async def _run_host(spec: NodeSpec) -> None:
     try:
         await asyncio.Event().wait()  # run until Ctrl-C
     finally:
-        dash_server.should_exit = True
-        await asyncio.sleep(0.3)  # let uvicorn exit its loop before we tear the loop down
+        await dash_shutdown(dash_server)
         with contextlib.suppress(Exception):
             await advert.stop()
         await host.stop()
@@ -282,8 +282,7 @@ async def _run_solo_train(job) -> None:
         try:
             stats = await asyncio.to_thread(run_local, job, on_step, on_round)
         finally:
-            dash_server.should_exit = True
-            await asyncio.sleep(0.3)
+            await dash_shutdown(dash_server)
 
     final = stats[-1] if stats else None
     console.print(
@@ -359,8 +358,7 @@ async def _run_pool_train(job, spec: NodeSpec, min_workers: int) -> None:
             )
         )
     finally:
-        dash_server.should_exit = True
-        await asyncio.sleep(0.3)  # let uvicorn exit its loop before we tear the loop down
+        await dash_shutdown(dash_server)
         with contextlib.suppress(Exception):
             await advert.stop()
         await host.stop()
