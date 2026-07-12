@@ -1,4 +1,4 @@
-# onepool
+# onepool [![PyPI Downloads](https://static.pepy.tech/personalized-badge/onepool?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/onepool)
 
 **Turn the laptops in the room into one pool of ML compute.**
 
