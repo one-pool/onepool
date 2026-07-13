@@ -11,6 +11,7 @@ import urllib.request
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -96,7 +97,7 @@ def join(
     try:
         session = SessionCode.parse(code)
     except ValueError as e:
-        console.print(f"[red]{e}[/red]")
+        console.print(f"[red]{escape(str(e))}[/red]")
         raise typer.Exit(1) from None
 
     with console.status("Probing hardware..."):
@@ -127,12 +128,12 @@ def train(
     try:
         job = TrainJob.from_yaml(config)
     except (OSError, ValueError) as e:
-        console.print(f"[red]{e}[/red]")
+        console.print(f"[red]{escape(str(e))}[/red]")
         raise typer.Exit(1) from None
     try:
         require_training_stack()
     except ImportError as e:
-        console.print(f"[red]{e}[/red]")
+        console.print(f"[red]{escape(str(e))}[/red]")
         raise typer.Exit(1) from None
 
     if pool:
@@ -388,7 +389,7 @@ async def _run_client(session: SessionCode, spec: NodeSpec, direct: str | None) 
     try:
         await client.connect(host_ip, port, fp)
     except JoinRejected as e:
-        console.print(f"[red]join failed: {e}[/red]")
+        console.print(f"[red]join failed: {escape(str(e))}[/red]")
         raise typer.Exit(1) from None
     except (ConnectionError, OSError, asyncio.TimeoutError):
         console.print(f"[red]could not reach pool at {host_ip}:{port}[/red]")
